@@ -15,12 +15,12 @@ var (
 
 func init() {
 	godotenv.Load()
-	Port = getenv("PORT", "8080")
-	AppID = getenv("API_ID", "")
-	AppHash = getenv("API_HASH", "")
-	CommandPrefix = getenv("COMMAND_PREFIX", ".")
+	Port = Getenv("PORT", "8080")
+	AppID = Getenv("API_ID", "")
+	AppHash = Getenv("API_HASH", "")
+	CommandPrefix = Getenv("COMMAND_PREFIX", ".")
 }
-func getenv(key, fallback string) string {
+func Getenv(key, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
 	}
