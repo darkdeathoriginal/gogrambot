@@ -13,6 +13,7 @@ import (
 	"github.com/amarnathcjd/gogram/telegram"
 	"github.com/darkdeathoriginal/gogrambot/config"
 	"github.com/darkdeathoriginal/gogrambot/handler"
+	"github.com/darkdeathoriginal/gogrambot/models"
 	_ "github.com/darkdeathoriginal/gogrambot/plugins"
 	"github.com/joho/godotenv"
 )
@@ -41,6 +42,7 @@ const SessionFile = "telegram.session"
 
 func main() {
 	godotenv.Load()
+	models.InitDatabase()
 
 	// 1. Init Client
 	initClient()
@@ -85,7 +87,7 @@ func initClient() {
 		updateState(StateLoggedIn)
 		client.SendMessage("me", fmt.Sprintf("Hello, %s!", me.FirstName))
 		client.SetCommandPrefixes(config.CommandPrefix)
-		selfFilter := telegram.Any(telegram.FilterOutgoing,telegram.FromUser(client.Me().ID))
+		selfFilter := telegram.Any(telegram.FilterOutgoing, telegram.FromUser(client.Me().ID))
 		for _, plugin := range handler.Plugins {
 			event := plugin.On
 			if event == "" {
@@ -112,7 +114,7 @@ func initClient() {
 				finalFilter = telegram.Filter{}
 			}
 
-			client.On(event, plugin.Handler,finalFilter)
+			client.On(event, plugin.Handler, finalFilter)
 		}
 		client.On("cmd:anything", func(m *telegram.NewMessage) error {
 			m.Reply("You said: " + m.Text())
