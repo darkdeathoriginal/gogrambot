@@ -4,6 +4,7 @@
 while true; do
     echo "🔨 Building binary..."
     # Build the bot, outputting to a binary named 'bot'
+    go mod tidy
     CGO_ENABLED=1 go build -o bot main.go
     
     # Check if build succeeded
