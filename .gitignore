@@ -1,0 +1,7 @@
+tmp
+.env
+cache.db
+cache_*.db
+session.dat
+*.session
+dev_*.go

