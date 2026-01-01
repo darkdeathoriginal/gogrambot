@@ -87,6 +87,7 @@ func initClient() {
 		updateState(StateLoggedIn)
 		client.SendMessage("me", fmt.Sprintf("Hello, %s!", me.FirstName))
 		client.SetCommandPrefixes(config.CommandPrefix)
+		client.SetParseMode(telegram.MarkDown)
 		selfFilter := telegram.Any(telegram.FilterOutgoing, telegram.FromUser(client.Me().ID))
 		for _, plugin := range handler.Plugins {
 			event := plugin.On
