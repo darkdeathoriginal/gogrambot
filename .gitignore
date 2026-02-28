@@ -6,3 +6,4 @@ session.dat
 *.session
 dev_*.go
 bot.db
+bot
