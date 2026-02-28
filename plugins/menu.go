@@ -23,6 +23,39 @@ func init() {
 		Category("General").
 		On("cmd:help").
 		Handle(menuHandler)
+
+	handler.NewPlugin("list").
+		Description("Lists installed plugins").
+		Category("Owner").
+		Handle(func(message *telegram.NewMessage) error {
+			// Specific plugin lookup
+
+			args := message.Args()
+			if len(args) > 0 {
+				query := args
+				for _, p := range handler.Plugins {
+					if p.Name == query {
+						message.Reply(fmt.Sprintf("**%s**\nDesc: %s\nUsage: %s", p.Name, p.Description, p.Usage), &telegram.SendOptions{
+							ParseMode: telegram.MarkDown,
+						})
+						return nil
+					}
+				}
+				message.Reply("Plugin not found.")
+				return nil
+			}
+
+			// List all
+			var msg strings.Builder
+			msg.WriteString("**Installed Plugins:**\n\n")
+			for _, p := range handler.Plugins {
+				msg.WriteString(fmt.Sprintf("• `%s`: %s\n", p.Name, p.Description))
+			}
+			message.Reply(msg.String(), &telegram.SendOptions{
+				ParseMode: telegram.MarkDown,
+			})
+			return nil
+		})
 }
 
 func menuHandler(m *telegram.NewMessage) error {
