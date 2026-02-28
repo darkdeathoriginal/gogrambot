@@ -6,7 +6,7 @@ type ExternalPlugin struct {
 }
 
 func (ExternalPlugin) TableName() string {
-	return "external_plugins"
+	return "external_plugin"
 }
 
 func init() {
