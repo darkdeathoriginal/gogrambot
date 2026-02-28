@@ -10,17 +10,16 @@ import (
 
 func init() {
 	handler.NewPlugin("ping").
-		Description("Responds with 'Pong!' when you send /ping").
-		Category("Utility").
+		Description("Responds with bot latency").
+		Category("Userbot").
 		Handle(func(message *telegram.NewMessage) error {
 			startTime := time.Now()
-			msg, err := message.Reply("Pinging...")
-			endTime := time.Now()
+			msg, err := message.Reply("...Pinging...")
 			if err != nil {
 				return err
 			}
-			latency := endTime.Sub(startTime).Milliseconds()
-			_, err = msg.Edit(fmt.Sprintf("Latency: %d ms", latency))
+			latency := time.Since(startTime).Milliseconds()
+			_, err = msg.Edit(fmt.Sprintf("🏓 **Pong!**\nLatency: `%dms`", latency))
 			return err
 		})
 }
