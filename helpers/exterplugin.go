@@ -3,12 +3,15 @@ package helpers
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/darkdeathoriginal/gogrambot/models"
 )
 
 func InstallExternalPlugin(link string) (string, error) {
@@ -58,4 +61,18 @@ func InstallExternalPlugin(link string) (string, error) {
 		return "", fmt.Errorf("Failed to save plugin file: %v", err)
 	}
 	return pluginName, nil
+}
+
+func LoadExternalPlugins() {
+	// Load plugins from DB
+	var externalPlugins []models.ExternalPlugin
+	models.DB.Find(&externalPlugins)
+	for _, p := range externalPlugins {
+		if _, err := os.Stat("./plugins/" + p.Name + ".go"); os.IsNotExist(err) {
+			log.Printf("Plugin file for '%s' not found. Downloading.\n", p.Name)
+			InstallExternalPlugin(p.Url)
+		} else {
+			log.Printf("Plugin file for '%s' already exists. Skipping download.\n", p.Name)
+		}
+	}
 }
