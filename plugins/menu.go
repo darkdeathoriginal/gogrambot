@@ -49,6 +49,9 @@ func init() {
 			var msg strings.Builder
 			msg.WriteString("**Installed Plugins:**\n\n")
 			for _, p := range handler.Plugins {
+				if p.Description == "" {
+					continue
+				}
 				msg.WriteString(fmt.Sprintf("• `%s`: %s\n", p.Name, p.Description))
 			}
 			message.Reply(msg.String(), &telegram.SendOptions{
@@ -94,6 +97,9 @@ func menuHandler(m *telegram.NewMessage) error {
 
 	for _, p := range handler.Plugins {
 		cat := p.Category
+		if p.Description == "" {
+			continue // Skip plugins without description (likely internal or hidden)
+		}
 		if cat == "" {
 			cat = "Uncategorized"
 		}
