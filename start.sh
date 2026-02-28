@@ -3,6 +3,10 @@
 # Loop forever
 while true; do
     echo "🔨 Building binary..."
+    if [ -f "prebuild.go" ]; then
+        echo "⚙️ Running prebuild.go..."
+        go run prebuild.go
+    fi
     # Build the bot, outputting to a binary named 'bot'
     go mod tidy
     CGO_ENABLED=1 go build -o bot main.go
