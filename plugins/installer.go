@@ -2,17 +2,16 @@ package plugins
 
 import (
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
-	"regexp"
+
 	"strings"
 
 	"github.com/amarnathcjd/gogram/telegram"
 	"github.com/darkdeathoriginal/gogrambot/handler"
+	"github.com/darkdeathoriginal/gogrambot/helpers"
+	"github.com/darkdeathoriginal/gogrambot/models"
 )
 
 func init() {
@@ -48,55 +47,28 @@ func init() {
 				link = strings.Replace(link, "github.com", "raw.githubusercontent.com", 1)
 				link = strings.Replace(link, "/blob/", "/", 1)
 			}
+			var existing models.ExternalPlugin
+			models.DB.Find(&existing, "url = ?", link)
 
-			// Add timestamp to bypass cache
-			resp, err := http.Get(link + "?timestamp=" + fmt.Sprint(os.Getpid()))
+			if existing.Name != "" {
+				message.Reply("Plugin already installed.")
+				return nil
+			}
+			pluginName, err := helpers.InstallExternalPlugin(link)
 			if err != nil {
-				message.Reply("Failed to fetch URL: " + err.Error())
+				message.Reply("Failed to install plugin: " + err.Error())
 				return nil
 			}
-			defer resp.Body.Close()
-
-			bodyBytes, err := io.ReadAll(resp.Body)
-			if err != nil {
-				message.Reply("Failed to read data.")
+			// Save to DB
+			newPlugin := models.ExternalPlugin{
+				Name: pluginName,
+				Url:  link,
+			}
+			result := models.DB.Create(&newPlugin)
+			if result.Error != nil {
+				message.Reply("Failed to save plugin to database: " + result.Error.Error())
 				return nil
 			}
-			code := string(bodyBytes)
-
-			// Extract Plugin Name using Regex
-			// Matches: handler.NewPlugin("name")
-			re := regexp.MustCompile(`NewPlugin\(\s*["']([^"']+)["']\s*\)`)
-			matches := re.FindStringSubmatch(code)
-
-			var pluginName string
-			if len(matches) > 1 {
-				pluginName = matches[1]
-			} else {
-				// Fallback: Try to use filename from URL
-				base := filepath.Base(u.Path)
-				pluginName = strings.TrimSuffix(base, filepath.Ext(base))
-				if pluginName == "" || pluginName == "." {
-					message.Reply("__Invalid plugin. No plugin name found in code!__")
-					return nil
-				}
-			}
-
-			// Security Check: Ensure package is correct
-			if !strings.Contains(code, "package plugins") {
-				message.Reply("The code must belong to 'package plugins'")
-				return nil
-			}
-
-			// Save the file
-			// Note: We use the extracted name for the filename
-			fileName := fmt.Sprintf("./plugins/%s.go", pluginName)
-			err = os.WriteFile(fileName, bodyBytes, 0644)
-			if err != nil {
-				message.Reply("Failed to save file: " + err.Error())
-				return nil
-			}
-
 			message.Reply(fmt.Sprintf("Installed **%s**. \n\n__⚠️ System Restart/Rebuild required to apply changes.__", pluginName), &telegram.SendOptions{
 				ParseMode: telegram.MarkDown,
 			})
@@ -112,11 +84,17 @@ func init() {
 			// Specific plugin lookup
 
 			args := message.Args()
+			var externalPlugins []models.ExternalPlugin
+			result := models.DB.Find(&externalPlugins)
+			if result.RowsAffected == 0 {
+				message.Reply("No plugins installed.")
+				return nil
+			}
 			if len(args) > 0 {
 				query := args
-				for _, p := range handler.Plugins {
+				for _, p := range externalPlugins {
 					if p.Name == query {
-						message.Reply(fmt.Sprintf("**%s**\nDesc: %s\nUsage: %s", p.Name, p.Description, p.Usage), &telegram.SendOptions{
+						message.Reply(fmt.Sprintf("**%s**\nUrl: %s", p.Name, p.Url), &telegram.SendOptions{
 							ParseMode: telegram.MarkDown,
 						})
 						return nil
@@ -129,8 +107,8 @@ func init() {
 			// List all
 			var msg strings.Builder
 			msg.WriteString("**Installed Plugins:**\n\n")
-			for _, p := range handler.Plugins {
-				msg.WriteString(fmt.Sprintf("• `%s`: %s\n", p.Name, p.Description))
+			for _, p := range externalPlugins {
+				msg.WriteString(fmt.Sprintf("• `%s`: %s\n", p.Name, p.Url))
 			}
 			message.Reply(msg.String(), &telegram.SendOptions{
 				ParseMode: telegram.MarkDown,
@@ -151,17 +129,10 @@ func init() {
 			}
 			target := args
 
-			// 1. Check if plugin exists in memory
-			var found bool
-			for _, p := range handler.Plugins {
-				if p.Name == target {
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				message.Reply("Plugin not active in memory.")
+			var existing models.ExternalPlugin
+			result := models.DB.Find(&existing, "name = ?", target)
+			if result.RowsAffected == 0 {
+				message.Reply("Plugin not found in database.")
 				return nil
 			}
 
@@ -179,6 +150,12 @@ func init() {
 			err := os.Remove(fileName)
 			if err != nil {
 				message.Reply("Failed to delete file: " + err.Error())
+				return nil
+			}
+			// 3. Remove from DB
+			result = models.DB.Delete(&models.ExternalPlugin{}, "name = ?", target)
+			if result.Error != nil {
+				message.Reply("Failed to remove plugin from database: " + result.Error.Error())
 				return nil
 			}
 
