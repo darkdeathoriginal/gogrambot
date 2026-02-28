@@ -52,7 +52,7 @@ func init() {
 			}
 
 			var info string
-			info += fmt.Sprintf("👤 **User Info:**\n")
+			info += "👤 **User Info:**\n"
 			info += fmt.Sprintf("├ **ID:** `%d`\n", u.ID)
 
 			// Additional Info if available might be in u.UserObj fields if needed but gogram user struct is missing some fields from tl
