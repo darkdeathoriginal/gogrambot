@@ -28,7 +28,7 @@ func init() {
 				return err
 			}
 
-			packName := fmt.Sprintf("gogram_pack_%d_by_%s", me.ID, me.Username)
+			packName := fmt.Sprintf("%spack01" me.Username)
 			if me.Username == "" {
 				packName = fmt.Sprintf("gogram_pack_%d_by_id", me.ID)
 			}
