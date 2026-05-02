@@ -90,32 +90,38 @@ func initClient() {
 		client.SetParseMode(telegram.MarkDown)
 		selfFilter := telegram.Any(telegram.FilterOutgoing, telegram.FromUser(client.Me().ID))
 		for _, plugin := range handler.Plugins {
-			event := plugin.On
-			if event == "" {
-				event = "cmd:" + plugin.Name
+			if plugin.OnStart != nil {
+				go plugin.OnStart(client)
 			}
 
-			var finalFilter telegram.Filter
+			if plugin.Handler != nil {
+				event := plugin.On
+				if event == "" {
+					event = "cmd:" + plugin.Name
+				}
 
-			switch {
-			// Case 1: No custom filter, NOT AllowAll → block self
-			case plugin.Filter == nil && !plugin.AllowAll:
-				finalFilter = selfFilter
+				var finalFilter telegram.Filter
 
-			// Case 2: Custom filter exists, NOT AllowAll → AND with self filter
-			case plugin.Filter != nil && !plugin.AllowAll:
-				finalFilter = telegram.All(*plugin.Filter, selfFilter)
+				switch {
+				// Case 1: No custom filter, NOT AllowAll → block self
+				case plugin.Filter == nil && !plugin.AllowAll:
+					finalFilter = selfFilter
 
-			// Case 3: Custom filter exists, AllowAll → use as-is
-			case plugin.Filter != nil && plugin.AllowAll:
-				finalFilter = *plugin.Filter
+				// Case 2: Custom filter exists, NOT AllowAll → AND with self filter
+				case plugin.Filter != nil && !plugin.AllowAll:
+					finalFilter = telegram.All(*plugin.Filter, selfFilter)
 
-			// Case 4: No filter + AllowAll → allow everything
-			default:
-				finalFilter = telegram.Filter{}
+				// Case 3: Custom filter exists, AllowAll → use as-is
+				case plugin.Filter != nil && plugin.AllowAll:
+					finalFilter = *plugin.Filter
+
+				// Case 4: No filter + AllowAll → allow everything
+				default:
+					finalFilter = telegram.Filter{}
+				}
+
+				client.On(event, plugin.Handler, finalFilter)
 			}
-
-			client.On(event, plugin.Handler, finalFilter)
 		}
 		client.On("cmd:anything", func(m *telegram.NewMessage) error {
 			m.Reply("You said: " + m.Text())

@@ -19,6 +19,7 @@ type PluginDetails struct {
 type Plugin struct {
 	PluginDetails
 	Handler func(*telegram.NewMessage) error
+	OnStart func(*telegram.Client)
 }
 
 var (
@@ -55,6 +56,15 @@ func (b *PluginBuilder) Usage(usage string) *PluginBuilder {
 func (b *PluginBuilder) Handle(fn func(*telegram.NewMessage) error) {
 	b.p.Handler = fn
 	RegisterPlugin(b.p)
+}
+
+func (b *PluginBuilder) Register() {
+	RegisterPlugin(b.p)
+}
+
+func (b *PluginBuilder) OnStart(fn func(*telegram.Client)) *PluginBuilder {
+	b.p.OnStart = fn
+	return b
 }
 
 func (b *PluginBuilder) On(event string) *PluginBuilder {
