@@ -2,6 +2,9 @@ package plugins
 
 import (
 	"fmt"
+	"log"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/amarnathcjd/gogram/telegram"
@@ -144,4 +147,33 @@ func init() {
 			message.Reply("Message pinned successfully.")
 			return nil
 		})
+
+	handler.NewPlugin("update").
+		Description("Updates the bot to the latest version").
+		Category("Admin").
+		Handle(updateCommand)
+}
+
+func updateCommand(message *telegram.NewMessage) error {
+
+	message.Reply("🛠 Update started. Pulling latest changes and building...")
+
+	go func() {
+		buildCmd := "git pull && go build -v"
+		log.Printf("Running build command: %s", buildCmd)
+		cmd := exec.Command("sh", "-lc", buildCmd)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			log.Printf("build command failed: %v", err)
+			_, _ = message.Client.SendMessage(message.Chat.ID, "❌ Build command failed. Check server logs for details.", &telegram.SendOptions{ParseMode: "markdown"})
+			return
+		}
+		//kill the current process to allow the new build to take over
+		log.Println("Build successful. Restarting bot...")
+		_, _ = message.Client.SendMessage(message.Chat.ID, "✅ Update complete. Restarting bot...", &telegram.SendOptions{ParseMode: "markdown"})
+		os.Exit(0)
+	}()
+
+	return nil
 }
