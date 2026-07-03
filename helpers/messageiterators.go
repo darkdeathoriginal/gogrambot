@@ -8,13 +8,21 @@ import (
 
 // IterMessagesReverse fetches messages from oldest to newest.
 func IterMessagesReverse(c *telegram.Client, chatID any, callback func(*telegram.NewMessage) error) error {
+	return IterMessagesReverseFrom(c, chatID, 1, callback)
+}
+
+// IterMessagesReverseFrom fetches messages from oldest to newest starting after the given message ID.
+func IterMessagesReverseFrom(c *telegram.Client, chatID any, startAfterID int32, callback func(*telegram.NewMessage) error) error {
 	peer, err := c.ResolvePeer(chatID)
 	if err != nil {
 		return err
 	}
 
-	var offsetId int32 = 1 // Start from the oldest possible message ID
-	var limit int32 = 100  // API limit for messages.getHistory is up to 100
+	var offsetId int32 = startAfterID
+	if offsetId < 1 {
+		offsetId = 1
+	}
+	var limit int32 = 100 // API limit for messages.getHistory is up to 100
 
 	for {
 		// Using AddOffset = -limit with OffsetID fetches messages forward in time
