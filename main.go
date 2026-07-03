@@ -72,6 +72,10 @@ func initClient() {
 		AppID:   int32(appID),
 		AppHash: appHash,
 		Session: SessionFile, // Saves login to file
+		FloodHandler: func(err error) bool {
+			log.Printf("Flood error: %v", err)
+			return true // Continue retrying
+		},
 	})
 
 	if err != nil {
