@@ -19,6 +19,7 @@ func init() {
 }
 func handleJsonLog(m *telegram.NewMessage) error {
 	var jsonString []byte
+	defer m.Delete()
 	if !m.IsReply() {
 		if strings.Contains(m.Args(), "-s") {
 			jsonString, _ = json.MarshalIndent(m.Sender, "", "  ")
@@ -32,7 +33,7 @@ func handleJsonLog(m *telegram.NewMessage) error {
 	} else {
 		r, err := m.GetReplyMessage()
 		if err != nil {
-			m.Reply("<code>Error:</code> <b>" + err.Error() + "</b>")
+			m.Client.SendMessage("me", "<code>Error:</code> <b>"+err.Error()+"</b>", &telegram.SendOptions{ParseMode: telegram.HTML})
 			return nil
 		}
 		if strings.Contains(m.Args(), "-s") {
@@ -54,7 +55,7 @@ func handleJsonLog(m *telegram.NewMessage) error {
 	for _, v := range dataFields {
 		decoded, err := base64.StdEncoding.DecodeString(v[1])
 		if err != nil {
-			m.Reply("Error: " + err.Error())
+			m.Client.SendMessage("me", "<code>Error:</code> <b>"+err.Error()+"</b>", &telegram.SendOptions{ParseMode: telegram.HTML})
 			return nil
 		}
 		jsonString = []byte(strings.ReplaceAll(string(jsonString), v[0], `"Data": "`+string(decoded)+`"`))
@@ -64,22 +65,22 @@ func handleJsonLog(m *telegram.NewMessage) error {
 		defer os.Remove("message.json")
 		tmpFile, err := os.Create("message.json")
 		if err != nil {
-			m.Reply("Error: " + err.Error())
+			m.Client.SendMessage("me", "<code>Error:</code> <b>"+err.Error()+"</b>", &telegram.SendOptions{ParseMode: telegram.HTML})
 			return nil
 		}
 
 		_, err = tmpFile.Write(jsonString)
 		if err != nil {
-			m.Reply("Error: " + err.Error())
+			m.Client.SendMessage("me", "<code>Error:</code> <b>"+err.Error()+"</b>", &telegram.SendOptions{ParseMode: telegram.HTML})
 			return nil
 		}
 
-		_, err = m.ReplyMedia(tmpFile.Name(), &telegram.MediaOptions{Caption: "Message JSON"})
+		_, err = m.Client.SendMedia("me", tmpFile.Name(), &telegram.MediaOptions{Caption: "Message JSON"})
 		if err != nil {
-			m.Reply("Error: " + err.Error())
+			m.Client.SendMessage("me", "<code>Error:</code> <b>"+err.Error()+"</b>", &telegram.SendOptions{ParseMode: telegram.HTML})
 		}
 	} else {
-		m.Reply("<pre language='json'>" + string(jsonString) + "</pre>")
+		m.Client.SendMessage("me", "<pre language='json'>"+string(jsonString)+"</pre>", &telegram.SendOptions{ParseMode: telegram.HTML})
 	}
 
 	return nil
