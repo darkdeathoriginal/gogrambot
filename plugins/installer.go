@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/exec"
 
 	"strings"
 
@@ -20,55 +21,21 @@ func init() {
 		Description("Downloads and installs a plugin from a URL").
 		Category("Owner").
 		Handle(func(message *telegram.NewMessage) error {
-			args := message.Args()
-			if len(args) == 0 {
+			args := strings.TrimSpace(message.Args())
+			if args == "" {
 				message.Reply("Please provide a URL.")
 				return nil
 			}
 			link := args
-			log.Println("Installing plugin from URL:", args)
-			//convert bytes to string
-			// Validate URL
-			u, err := url.Parse(link)
-			if err != nil || u.Scheme == "" || u.Host == "" {
-
-				message.Reply("Invalid URL.")
-				return nil
-			}
-
-			// Handle Gist/GitHub Raw links (Ported from your Node.js code)
-			switch u.Host {
-			case "gist.github.com", "gist.githubusercontent.com":
-				if !strings.HasSuffix(u.String(), "/raw") {
-					link = u.String() + "/raw"
-				}
-			case "github.com":
-				// Convert github blob links to raw
-				link = strings.Replace(link, "github.com", "raw.githubusercontent.com", 1)
-				link = strings.Replace(link, "/blob/", "/", 1)
-			}
-			var existing models.ExternalPlugin
-			models.DB.Find(&existing, "url = ?", link)
-
-			if existing.Name != "" {
-				message.Reply("Plugin already installed.")
-				return nil
-			}
-			pluginName, err := helpers.InstallExternalPlugin(link)
+			pluginName, err := installPlugin(link)
 			if err != nil {
+				if pluginName != "" {
+					removePlugin(pluginName)
+				}
 				message.Reply("Failed to install plugin: " + err.Error())
 				return nil
 			}
-			// Save to DB
-			newPlugin := models.ExternalPlugin{
-				Name: pluginName,
-				Url:  link,
-			}
-			result := models.DB.Create(&newPlugin)
-			if result.Error != nil {
-				message.Reply("Failed to save plugin to database: " + result.Error.Error())
-				return nil
-			}
+
 			message.Reply(fmt.Sprintf("Installed **%s**. \n\n__⚠️ System Restart/Rebuild required to apply changes.__", pluginName), &telegram.SendOptions{
 				ParseMode: telegram.MarkDown,
 			})
@@ -83,7 +50,7 @@ func init() {
 		Handle(func(message *telegram.NewMessage) error {
 			// Specific plugin lookup
 
-			args := message.Args()
+			args := strings.TrimSpace(message.Args())
 			var externalPlugins []models.ExternalPlugin
 			result := models.DB.Find(&externalPlugins)
 			if result.RowsAffected == 0 {
@@ -122,40 +89,16 @@ func init() {
 		Category("Owner").
 		On("cmd:remove").
 		Handle(func(message *telegram.NewMessage) error {
-			args := message.Args()
-			if len(args) == 0 {
+			args := strings.TrimSpace(message.Args())
+			if args == "" {
 				message.Reply("Need plugin name.")
 				return nil
 			}
 			target := args
 
-			var existing models.ExternalPlugin
-			result := models.DB.Find(&existing, "name = ?", target)
-			if result.RowsAffected == 0 {
-				message.Reply("Plugin not found in database.")
-				return nil
-			}
-
-			// 2. Delete the file
-			// We try to guess the filename. In Go, filename doesn't strictly have to match plugin name,
-			// but we enforced it in the 'install' command.
-			fileName := fmt.Sprintf("./plugins/%s.go", target)
-
-			// Check if file exists
-			if _, err := os.Stat(fileName); os.IsNotExist(err) {
-				message.Reply("Plugin active, but source file not found at " + fileName)
-				return nil
-			}
-
-			err := os.Remove(fileName)
+			err := removePlugin(target)
 			if err != nil {
-				message.Reply("Failed to delete file: " + err.Error())
-				return nil
-			}
-			// 3. Remove from DB
-			result = models.DB.Delete(&models.ExternalPlugin{}, "name = ?", target)
-			if result.Error != nil {
-				message.Reply("Failed to remove plugin from database: " + result.Error.Error())
+				message.Reply("Failed to remove plugin: " + err.Error())
 				return nil
 			}
 
@@ -164,4 +107,117 @@ func init() {
 			})
 			return nil
 		})
+
+	handler.NewPlugin("pupdate").
+		Description("Updates a plugin").
+		Category("Owner").
+		Handle(func(message *telegram.NewMessage) error {
+			args := strings.TrimSpace(message.Args())
+			if args == "" {
+				message.Reply("Need plugin name.")
+				return nil
+			}
+			target := args
+			var existing models.ExternalPlugin
+			result := models.DB.Find(&existing, "name = ?", target)
+			if result.RowsAffected == 0 {
+				return fmt.Errorf("plugin not found in database")
+			}
+
+			err := removePlugin(target)
+			if err != nil {
+				message.Reply("Failed to update plugin: " + err.Error())
+				return nil
+			}
+			// Reinstall
+			pluginName, err := installPlugin(existing.Url)
+			if err != nil {
+				if pluginName != "" {
+					removePlugin(pluginName)
+				}
+				message.Reply("Failed to update plugin: " + err.Error())
+				return nil
+			}
+			message.Reply(fmt.Sprintf("**%s** updated successfully.\n\n__⚠️ Restarting to apply changes.__", pluginName), &telegram.SendOptions{
+				ParseMode: telegram.MarkDown,
+			})
+			os.Exit(0)
+			return nil
+		})
+}
+
+func removePlugin(target string) error {
+	var existing models.ExternalPlugin
+	result := models.DB.Find(&existing, "name = ?", target)
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("plugin not found in database")
+	}
+
+	// 2. Delete the file
+	// We try to guess the filename. In Go, filename doesn't strictly have to match plugin name,
+	// but we enforced it in the 'install' command.
+	fileName := fmt.Sprintf("./plugins/%s.go", target)
+
+	// Check if file exists
+	if _, err := os.Stat(fileName); os.IsNotExist(err) {
+		return fmt.Errorf("source file not found at %s", fileName)
+	}
+
+	err := os.Remove(fileName)
+	if err != nil {
+		return err
+	}
+	result = models.DB.Delete(&models.ExternalPlugin{}, "name = ?", target)
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
+
+func installPlugin(link string) (string, error) {
+	log.Println("Installing plugin from URL:", link)
+	//convert bytes to string
+	// Validate URL
+	u, err := url.Parse(link)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+
+		return "", fmt.Errorf("invalid URL")
+	}
+
+	// Handle Gist/GitHub Raw links (Ported from your Node.js code)
+	switch u.Host {
+	case "gist.github.com", "gist.githubusercontent.com":
+		if !strings.HasSuffix(u.String(), "/raw") {
+			link = u.String() + "/raw"
+		}
+	case "github.com":
+		// Convert github blob links to raw
+		link = strings.Replace(link, "github.com", "raw.githubusercontent.com", 1)
+		link = strings.Replace(link, "/blob/", "/", 1)
+	}
+	var existing models.ExternalPlugin
+	models.DB.Find(&existing, "url = ?", link)
+
+	if existing.Name != "" {
+		return "", fmt.Errorf("plugin already installed")
+	}
+	pluginName, err := helpers.InstallExternalPlugin(link)
+	if err != nil {
+		return pluginName, err
+	}
+	// Save to DB
+	newPlugin := models.ExternalPlugin{
+		Name: pluginName,
+		Url:  link,
+	}
+	result := models.DB.Create(&newPlugin)
+	if result.Error != nil {
+		return pluginName, result.Error
+	}
+	// build and check for errors (invoke go directly for portability)
+	_, err = exec.Command("go", "build", "-o", "bot", "main.go").Output()
+	if err != nil {
+		return pluginName, err
+	}
+	return pluginName, nil
 }
