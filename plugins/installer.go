@@ -112,9 +112,13 @@ func init() {
 		Description("Updates a plugin").
 		Category("Owner").
 		Handle(func(message *telegram.NewMessage) error {
+			msg, err := message.Reply("Updating plugin...")
+			if err != nil {
+				return err
+			}
 			args := strings.TrimSpace(message.Args())
 			if args == "" {
-				message.Reply("Need plugin name.")
+				msg.Edit("Need plugin name.")
 				return nil
 			}
 			target := args
@@ -124,9 +128,9 @@ func init() {
 				return fmt.Errorf("plugin not found in database")
 			}
 
-			err := removePlugin(target)
+			err = removePlugin(target)
 			if err != nil {
-				message.Reply("Failed to update plugin: " + err.Error())
+				msg.Edit("Failed to update plugin: " + err.Error())
 				return nil
 			}
 			// Reinstall
@@ -135,10 +139,10 @@ func init() {
 				if pluginName != "" {
 					removePlugin(pluginName)
 				}
-				message.Reply("Failed to update plugin: " + err.Error())
+				msg.Edit("Failed to update plugin: " + err.Error())
 				return nil
 			}
-			message.Reply(fmt.Sprintf("**%s** updated successfully.\n\n__⚠️ Restarting to apply changes.__", pluginName), &telegram.SendOptions{
+			msg.Edit(fmt.Sprintf("**%s** updated successfully.\n\n__⚠️ Restarting to apply changes.__", pluginName), &telegram.SendOptions{
 				ParseMode: telegram.MarkDown,
 			})
 			os.Exit(0)
