@@ -184,6 +184,9 @@ func updateCommand(message *telegram.NewMessage) error {
 			fmt.Sprintf("📥 **Incoming commits:**\n```\n%s\n```", changes),
 			&telegram.SendOptions{ParseMode: "markdown"},
 		)
+		if string(output) == "" {
+			return
+		}
 
 		// Pull and build
 		buildCmd := exec.Command("sh", "-lc", "git pull && go build -v")
