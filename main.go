@@ -59,7 +59,7 @@ func main() {
 	http.HandleFunc("/api/logout", logoutHandler)
 
 	fmt.Println("Server running at http://localhost:" + config.Port)
-	log.Fatal(http.ListenAndServe(":"+config.Port, nil))
+	log.Fatal(http.ListenAndServe(":"+config.Port, basicAuthMiddleware(http.DefaultServeMux)))
 }
 
 func initClient() {
@@ -251,4 +251,18 @@ func updateState(s LoginState) {
 	stateMu.Lock()
 	currentState = s
 	stateMu.Unlock()
+}
+
+func basicAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+
+		if !ok || user != config.WebUsername || pass != config.WebPassword {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted Area"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

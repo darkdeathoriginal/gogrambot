@@ -11,6 +11,8 @@ var (
 	AppID         string
 	AppHash       string
 	CommandPrefix string
+	WebUsername   string
+	WebPassword   string
 )
 
 func init() {
@@ -19,6 +21,8 @@ func init() {
 	AppID = Getenv("API_ID", "")
 	AppHash = Getenv("API_HASH", "")
 	CommandPrefix = Getenv("COMMAND_PREFIX", ".")
+	WebUsername = Getenv("WEB_USERNAME", "admin")
+	WebPassword = Getenv("WEB_PASSWORD", "admin")
 }
 func Getenv(key, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
