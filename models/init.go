@@ -2,6 +2,7 @@ package models
 
 import (
 	"log"
+	"strings"
 
 	"github.com/darkdeathoriginal/gogrambot/config"
 	"gorm.io/driver/postgres"
@@ -18,16 +19,23 @@ func InitDatabase() *gorm.DB {
 	var dialector gorm.Dialector
 	dbURL := config.Getenv("DATABASE_URL", "")
 
-	if dbURL != "" {
-		log.Println("DATABASE_URL found, connecting to PostgreSQL...")
+	switch {
+	case dbURL == "":
+		dbFile := "bot.db?_journal_mode=WAL&_busy_timeout=5000"
+		log.Printf("DATABASE_URL not set, using SQLite fallback: %s\n", dbFile)
+		dialector = sqlite.Open(dbFile)
+
+	case strings.HasPrefix(dbURL, "postgres://"),
+		strings.HasPrefix(dbURL, "postgresql://"):
+		log.Println("PostgreSQL DATABASE_URL found, connecting...")
 		dialector = postgres.New(postgres.Config{
 			DSN:                  dbURL,
 			PreferSimpleProtocol: true,
 		})
-	} else {
-		dbFile := "bot.db"
-		log.Printf("DATABASE_URL not set, using SQLite fallback: %s\n", dbFile)
-		dialector = sqlite.Open(dbFile)
+
+	default:
+		log.Printf("Using SQLite database: %s\n", dbURL)
+		dialector = sqlite.Open(dbURL)
 	}
 
 	// Connect to the database, making sure to disable the prepared statement cache.

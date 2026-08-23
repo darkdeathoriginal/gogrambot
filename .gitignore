@@ -7,3 +7,4 @@ session.dat
 dev_*.go
 bot.db
 bot
+*.db*
