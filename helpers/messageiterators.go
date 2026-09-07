@@ -1,7 +1,8 @@
 package helpers
 
 import (
-	"time"
+	"context"
+	"fmt"
 
 	"github.com/amarnathcjd/gogram/telegram"
 )
@@ -13,7 +14,12 @@ func IterMessagesReverse(c *telegram.Client, chatID any, callback func(*telegram
 
 // IterMessagesReverseFrom fetches messages from oldest to newest starting after the given message ID.
 func IterMessagesReverseFrom(c *telegram.Client, chatID any, startAfterID int32, callback func(*telegram.NewMessage) error) error {
-	peer, err := c.ResolvePeer(chatID)
+	var peer telegram.InputPeer
+	err := TelegramRequests.Do(context.Background(), TelegramHistoryInterval, func() error {
+		var err error
+		peer, err = c.ResolvePeer(chatID)
+		return err
+	})
 	if err != nil {
 		return err
 	}
@@ -26,12 +32,20 @@ func IterMessagesReverseFrom(c *telegram.Client, chatID any, startAfterID int32,
 
 	for {
 		// Using AddOffset = -limit with OffsetID fetches messages forward in time
-		history, _ := c.MessagesGetHistory(&telegram.MessagesGetHistoryParams{
-			Peer:      peer,
-			OffsetID:  offsetId,
-			AddOffset: -limit,
-			Limit:     limit,
+		var history telegram.MessagesMessages
+		err := TelegramRequests.Do(context.Background(), TelegramHistoryInterval, func() error {
+			var err error
+			history, err = c.MessagesGetHistory(&telegram.MessagesGetHistoryParams{
+				Peer:      peer,
+				OffsetID:  offsetId,
+				AddOffset: -limit,
+				Limit:     limit,
+			})
+			return err
 		})
+		if err != nil {
+			return fmt.Errorf("fetch message history after %d: %w", offsetId, err)
+		}
 
 		var rawMessages []telegram.Message
 		var users []telegram.User
@@ -65,6 +79,7 @@ func IterMessagesReverseFrom(c *telegram.Client, chatID any, startAfterID int32,
 
 		// The API returns the fetched chunk in newest-to-oldest order.
 		// So we must iterate backwards through this specific batch to process them oldest-to-newest.
+		previousOffset := offsetId
 		for i := len(messages) - 1; i >= 0; i-- {
 			msg := messages[i]
 
@@ -78,13 +93,10 @@ func IterMessagesReverseFrom(c *telegram.Client, chatID any, startAfterID int32,
 			}
 		}
 
-		// If the amount of returned messages is less than the limit, we've reached the end
-		if len(messages) < int(limit) {
+		// Stop at the end or if Telegram repeats a page without advancing.
+		if len(messages) < int(limit) || offsetId <= previousOffset {
 			break
 		}
-
-		// Small sleep to prevent hitting FloodWait too aggressively
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	return nil
