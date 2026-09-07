@@ -14,6 +14,7 @@ import (
 	"github.com/amarnathcjd/gogram/telegram"
 	"github.com/darkdeathoriginal/gogrambot/config"
 	"github.com/darkdeathoriginal/gogrambot/handler"
+	"github.com/darkdeathoriginal/gogrambot/helpers"
 	"github.com/darkdeathoriginal/gogrambot/models"
 	_ "github.com/darkdeathoriginal/gogrambot/plugins"
 	"github.com/joho/godotenv"
@@ -70,13 +71,10 @@ func initClient() {
 
 	var err error
 	client, err = telegram.NewClient(telegram.ClientConfig{
-		AppID:   int32(appID),
-		AppHash: appHash,
-		Session: SessionFile, // Saves login to file
-		FloodHandler: func(err error) bool {
-			log.Printf("Flood error: %v", err)
-			return true // Continue retrying
-		},
+		AppID:        int32(appID),
+		AppHash:      appHash,
+		Session:      SessionFile, // Saves login to file
+		FloodHandler: helpers.TelegramRequests.HandleFlood,
 	})
 
 	if err != nil {
@@ -202,8 +200,7 @@ func pollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if currentState == StateLoggedIn {
-		me, _ := client.GetMe()
-		resp["user"] = me
+		resp["user"] = client.Me()
 	}
 
 	json.NewEncoder(w).Encode(resp)
