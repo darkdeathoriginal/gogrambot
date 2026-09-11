@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -24,6 +25,7 @@ import (
 type LoginState string
 
 const (
+	StateStarting  LoginState = "STARTING"
 	StateIdle      LoginState = "IDLE"
 	StateQR        LoginState = "QR_SCAN"
 	StatePassword  LoginState = "PASSWORD_REQUIRED" // 2FA Needed
@@ -34,7 +36,11 @@ const (
 
 var (
 	client       *telegram.Client
-	currentState = StateIdle
+	currentState = StateStarting
+	currentUser  *telegram.UserObj
+	activeClient *telegram.Client
+	clientCtx    context.Context
+	cancelClient context.CancelFunc
 	qrURL        = ""
 	passwordChan = make(chan string) // The bridge between Browser and Callback
 	stateMu      sync.Mutex
@@ -65,12 +71,21 @@ func main() {
 }
 
 func initClient() {
+	stateMu.Lock()
+	if cancelClient != nil {
+		cancelClient()
+	}
+	clientCtx, cancelClient = context.WithCancel(context.Background())
+	ctx := clientCtx
+	currentState = StateStarting
+	currentUser = nil
+	qrURL = ""
+	stateMu.Unlock()
 	appIDStr := config.AppID
 	appHash := config.AppHash
 	appID, _ := strconv.Atoi(appIDStr)
 
-	var err error
-	client, err = telegram.NewClient(telegram.ClientConfig{
+	c, err := telegram.NewClient(telegram.ClientConfig{
 		AppID:        int32(appID),
 		AppHash:      appHash,
 		Session:      SessionFile, // Saves login to file
@@ -81,87 +96,143 @@ func initClient() {
 		log.Fatal("Client init failed:", err)
 	}
 
-	if err := client.Connect(); err != nil {
-		log.Println("Connect error:", err)
-	}
-
-	// Check if session is already valid
-	if me, err := client.GetMe(); err == nil {
-		updateState(StateLoggedIn)
-		client.SendMessage("me", fmt.Sprintf("Hello, %s!", me.FirstName))
-		client.SetCommandPrefixes(config.CommandPrefix)
-		client.SetParseMode(telegram.MarkDown)
-		selfFilter := telegram.Any(telegram.FilterOutgoing, telegram.FromUser(client.Me().ID))
-		for _, plugin := range handler.Plugins {
-			if plugin.OnStart != nil {
-				go plugin.OnStart(client)
-			}
-
-			if plugin.Handler != nil {
-				event := plugin.On
-				if event == "" {
-					event = "cmd:" + plugin.Name
-				}
-
-				var finalFilter telegram.Filter
-
-				switch {
-				// Case 1: No custom filter, NOT AllowAll → block self
-				case plugin.Filter == nil && !plugin.AllowAll:
-					finalFilter = selfFilter
-
-				// Case 2: Custom filter exists, NOT AllowAll → AND with self filter
-				case plugin.Filter != nil && !plugin.AllowAll:
-					finalFilter = telegram.All(*plugin.Filter, selfFilter)
-
-				// Case 3: Custom filter exists, AllowAll → use as-is
-				case plugin.Filter != nil && plugin.AllowAll:
-					finalFilter = *plugin.Filter
-
-				// Case 4: No filter + AllowAll → allow everything
-				default:
-					finalFilter = telegram.Filter{}
-				}
-
-				client.On(event, plugin.Handler, finalFilter)
-			}
+	stateMu.Lock()
+	client = c
+	stateMu.Unlock()
+	// Serve the dashboard while a real startup RPC waits for Telegram.
+	go func() {
+		if err := helpers.RetryTelegramFlood(ctx, "startup connection", c.Connect); err != nil {
+			log.Println("Connect error:", err)
+			setClientState(c, StateFailed)
+			return
 		}
-		client.On("cmd:anything", func(m *telegram.NewMessage) error {
-			m.Reply("You said: " + m.Text())
-			return nil
-		}, telegram.FilterOutgoing)
+		loadClientSession(ctx, c)
+	}()
+}
 
-	} else {
-		updateState(StateIdle)
+func loadClientSession(ctx context.Context, c *telegram.Client) {
+	var me *telegram.UserObj
+	err := helpers.RetryTelegramFlood(ctx, "startup account check", func() error {
+		var err error
+		me, err = c.GetMe()
+		return err
+	})
+	if err != nil {
+		log.Println("Account check failed:", err)
+		if c.MatchRPCError(err, "AUTH_KEY_UNREGISTERED") || c.MatchRPCError(err, "SESSION_REVOKED") || c.MatchRPCError(err, "SESSION_EXPIRED") {
+			setClientState(c, StateIdle)
+		} else {
+			setClientState(c, StateFailed)
+		}
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	stateMu.Lock()
+	if client != c || activeClient == c {
+		stateMu.Unlock()
+		return
+	}
+	activeClient = c
+	stateMu.Unlock()
+	c.SetCommandPrefixes(config.CommandPrefix)
+	c.SetParseMode(telegram.MarkDown)
+	selfFilter := telegram.Any(telegram.FilterOutgoing, telegram.FromUser(me.ID))
+	for _, plugin := range handler.Plugins {
+		if plugin.OnStart != nil {
+			go plugin.OnStart(c)
+		}
+
+		if plugin.Handler != nil {
+			event := plugin.On
+			if event == "" {
+				event = "cmd:" + plugin.Name
+			}
+
+			var finalFilter telegram.Filter
+
+			switch {
+			// Case 1: No custom filter, NOT AllowAll → block self
+			case plugin.Filter == nil && !plugin.AllowAll:
+				finalFilter = selfFilter
+
+			// Case 2: Custom filter exists, NOT AllowAll → AND with self filter
+			case plugin.Filter != nil && !plugin.AllowAll:
+				finalFilter = telegram.All(*plugin.Filter, selfFilter)
+
+			// Case 3: Custom filter exists, AllowAll → use as-is
+			case plugin.Filter != nil && plugin.AllowAll:
+				finalFilter = *plugin.Filter
+
+			// Case 4: No filter + AllowAll → allow everything
+			default:
+				finalFilter = telegram.Filter{}
+			}
+
+			c.On(event, plugin.Handler, finalFilter)
+		}
+	}
+	c.On("cmd:anything", func(m *telegram.NewMessage) error {
+		m.Reply("You said: " + m.Text())
+		return nil
+	}, telegram.FilterOutgoing)
+	stateMu.Lock()
+	if client == c {
+		currentUser = me
+		currentState = StateLoggedIn
+	}
+	stateMu.Unlock()
+	log.Printf("Telegram ready: plugins registered for user %d", me.ID)
+	// A greeting is optional and must never gate plugin registration or HTTP.
+	go func() {
+		if err := helpers.TelegramRequests.Do(ctx, helpers.TelegramSendInterval, func() error {
+			_, err := c.SendMessage("me", fmt.Sprintf("Hello, %s!", me.FirstName))
+			return err
+		}); err != nil {
+			log.Println("Startup greeting failed:", err)
+		}
+	}()
+}
+
+func setClientState(c *telegram.Client, state LoginState) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if client == c {
+		currentState = state
 	}
 }
 
 // --- The Login Logic (Running in Background) ---
 
 func startBackgroundLogin() {
-	updateState(StateQR)
+	stateMu.Lock()
+	c, ctx := client, clientCtx
+	stateMu.Unlock()
 
 	// Generate QR with the specific Options you requested
-	qr, err := client.QRLogin(telegram.QrOptions{
+	qr, err := c.QRLogin(telegram.QrOptions{
 		Timeout:    300,
 		MaxRetries: 3,
 
 		// 1. THIS IS CALLED IF 2FA IS ON
 		PasswordCallback: func() (string, error) {
 			fmt.Println("Library requested password. Waiting for Browser...")
-			updateState(StatePassword)
+			setClientState(c, StatePassword)
 
 			// BLOCK HERE: Wait until browser sends password via /api/password
-			pass := <-passwordChan
-
-			fmt.Println("Password received from browser, returning to library...")
-			return pass, nil
+			select {
+			case pass := <-passwordChan:
+				return pass, nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
 		},
 
 		// 2. THIS IS CALLED IF PASSWORD WAS WRONG
 		OnWrongPassword: func(attempt, maxRetries int) bool {
 			fmt.Printf("Wrong password attempt %d/%d\n", attempt, maxRetries)
-			updateState(StateWrongPass) // Tell browser to show "Wrong Password" error
+			setClientState(c, StateWrongPass)
 			// Return true to try again (which calls PasswordCallback again)
 			return true
 		},
@@ -169,21 +240,25 @@ func startBackgroundLogin() {
 
 	if err != nil {
 		log.Println("QR Gen Error:", err)
-		updateState(StateFailed)
+		setClientState(c, StateFailed)
 		return
 	}
 
-	qrURL = qr.Url()
+	stateMu.Lock()
+	if client == c {
+		qrURL = qr.Url()
+	}
+	stateMu.Unlock()
 
 	// Start waiting (Blocking)
 	go func() {
 		// This will block until scan is done AND password (if needed) is finished
 		if err := qr.WaitLogin(300); err != nil {
 			log.Println("Login Process Failed:", err)
-			updateState(StateFailed)
+			setClientState(c, StateFailed)
 		} else {
 			log.Println("Login Successful!")
-			updateState(StateLoggedIn)
+			loadClientSession(ctx, c)
 		}
 	}()
 }
@@ -200,7 +275,7 @@ func pollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if currentState == StateLoggedIn {
-		resp["user"] = client.Me()
+		resp["user"] = currentUser
 	}
 
 	json.NewEncoder(w).Encode(resp)
@@ -213,6 +288,7 @@ func startLoginHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "busy"})
 		return
 	}
+	currentState = StateQR
 	stateMu.Unlock()
 
 	go startBackgroundLogin()
@@ -238,17 +314,26 @@ func submitPasswordHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	client.AuthLogOut()
+	stateMu.Lock()
+	c := client
+	if c == nil || currentState == StateStarting {
+		stateMu.Unlock()
+		http.Error(w, "Telegram is still starting", http.StatusConflict)
+		return
+	}
+	previousState := currentState
+	currentState = StateStarting
+	stateMu.Unlock()
+	if _, err := c.AuthLogOut(); err != nil {
+		setClientState(c, previousState)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	c.Disconnect()
 	os.Remove(SessionFile)
 	os.Remove(SessionFile + "-journal")
 	initClient()
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
-}
-
-func updateState(s LoginState) {
-	stateMu.Lock()
-	currentState = s
-	stateMu.Unlock()
 }
 
 func basicAuthMiddleware(next http.Handler) http.Handler {

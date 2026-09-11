@@ -2,11 +2,14 @@ package helpers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
-	"sync"
+	"regexp"
+	"strconv"
 	"time"
 
-	"github.com/amarnathcjd/gogram/telegram"
+	"github.com/amarnathcjd/gogram"
 )
 
 // Conservative application defaults, not guaranteed Telegram quotas. All bulk
@@ -15,17 +18,16 @@ const (
 	TelegramHistoryInterval = time.Second
 	TelegramSendInterval    = 10 * time.Second
 	TelegramJoinInterval    = 30 * time.Second
+	telegramFloodRetries    = 3
 )
 
 var TelegramRequests = newTelegramRequestLimiter()
 
 type telegramRequestLimiter struct {
-	lane       chan struct{}
-	mu         sync.Mutex
-	next       time.Time
-	floodUntil time.Time
-	now        func() time.Time
-	sleep      func(context.Context, time.Duration) error
+	lane  chan struct{}
+	next  time.Time // protected by lane; never held during a flood wait
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
 }
 
 func newTelegramRequestLimiter() *telegramRequestLimiter {
@@ -45,64 +47,104 @@ func newTelegramRequestLimiter() *telegramRequestLimiter {
 	}
 }
 
-// Do serializes bulk operations and spaces attempts (including failed ones).
-// request must not call Do recursively. The flood callback uses a separate lock
-// so gogram can invoke it while an operation owns the lane.
+// Do paces individual attempts. Only the rejected operation waits on a flood;
+// unrelated workers can continue, and cancellation can interrupt that wait.
+// request must not call Do recursively.
 func (l *telegramRequestLimiter) Do(ctx context.Context, interval time.Duration, request func() error) error {
+	return l.retryFlood(ctx, "bulk request", func() error {
+		return l.attempt(ctx, interval, request)
+	})
+}
+
+func (l *telegramRequestLimiter) attempt(ctx context.Context, interval time.Duration, request func() error) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case l.lane <- struct{}{}:
 	}
 	defer func() { <-l.lane }()
-	if err := l.wait(ctx, true); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if delay := l.next.Sub(l.now()); delay > 0 {
+		if err := l.sleep(ctx, delay); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	defer func() {
-		l.mu.Lock()
 		l.next = l.now().Add(interval)
-		l.mu.Unlock()
 	}()
 	return request()
 }
 
-// HandleFlood is the ClientConfig.FloodHandler. In the pinned gogram version,
-// true immediately retries the RPC; the callback itself must perform the wait.
-func (l *telegramRequestLimiter) HandleFlood(err error) bool {
-	seconds := telegram.GetFloodWait(err)
-	if seconds <= 0 {
-		log.Printf("Telegram flood error without a usable wait; not retrying: %v", err)
-		return false
-	}
-	delay := time.Duration(seconds)*time.Second + time.Second
-	l.mu.Lock()
-	until := l.now().Add(delay)
-	if until.After(l.floodUntil) {
-		l.floodUntil = until
-	}
-	l.mu.Unlock()
-	log.Printf("Telegram flood wait: pausing bulk requests for at least %s: %v", delay, err)
-	return l.wait(context.Background(), false) == nil
+// Never sleep or recursively retry inside gogram's global RPC callback. The
+// caller must receive the error so startup and workers retain control.
+func (l *telegramRequestLimiter) HandleFlood(error) bool {
+	return false
 }
 
-func (l *telegramRequestLimiter) wait(ctx context.Context, includePacing bool) error {
-	for {
+// RetryTelegramFlood is for startup requests that must not wait for bulk pacing.
+func RetryTelegramFlood(ctx context.Context, operation string, request func() error) error {
+	return TelegramRequests.retryFlood(ctx, operation, request)
+}
+
+func (l *telegramRequestLimiter) retryFlood(ctx context.Context, operation string, request func() error) error {
+	for retries := 0; ; retries++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		l.mu.Lock()
-		until := l.floodUntil
-		if includePacing && l.next.After(until) {
-			until = l.next
+		err := request()
+		delay, flood := telegramFloodDelay(err)
+		if !flood {
+			return err
 		}
-		delay := until.Sub(l.now())
-		l.mu.Unlock()
-		if delay <= 0 {
-			return nil
+		if retries >= telegramFloodRetries {
+			return fmt.Errorf("%s: Telegram still reports a flood wait after %d retries: %w", operation, retries, err)
 		}
+		log.Printf("%s: Telegram rejected this operation; retry %d/%d at %s (wait %s): %v",
+			operation, retries+1, telegramFloodRetries, l.now().Add(delay).Format(time.RFC3339), delay, err)
 		if err := l.sleep(ctx, delay); err != nil {
 			return err
 		}
-		// Another RPC may have extended the account cooldown while we slept.
+		log.Printf("%s: flood wait finished; retrying now", operation)
 	}
+}
+
+var telegramFloodPattern = regexp.MustCompile(`(?:^|[\s\[])FLOOD_(?:PREMIUM_)?WAIT_([0-9]+)(?:$|[\s\]])`)
+
+func telegramFloodDelay(err error) (time.Duration, bool) {
+	if err == nil {
+		return 0, false
+	}
+	var seconds int64
+	var rpc *gogram.ErrResponseCode
+	if errors.As(err, &rpc) {
+		if rpc.Code != 420 || (rpc.Message != "FLOOD_WAIT_X" && rpc.Message != "FLOOD_PREMIUM_WAIT_X") {
+			return 0, false
+		}
+		value, ok := rpc.AdditionalInfo.(int)
+		if !ok {
+			return 0, false
+		}
+		seconds = int64(value)
+	} else {
+		// Support wrapped textual RPC errors, but never interpret a generic
+		// "Please wait" message or the local pacing delay as a Telegram limit.
+		match := telegramFloodPattern.FindStringSubmatch(err.Error())
+		if match == nil {
+			return 0, false
+		}
+		var parseErr error
+		seconds, parseErr = strconv.ParseInt(match[1], 10, 64)
+		if parseErr != nil {
+			return 0, false
+		}
+	}
+	if seconds < 0 || seconds > int64((time.Duration(1<<63-1)-time.Second)/time.Second) {
+		return 0, false
+	}
+	return time.Duration(seconds)*time.Second + time.Second, true
 }
