@@ -16,7 +16,7 @@ import (
 // operations share one lane so their individual delays cannot add up to a burst.
 const (
 	TelegramHistoryInterval = time.Second
-	TelegramSendInterval    = 10 * time.Second
+	TelegramSendInterval    = 1 * time.Second
 	TelegramJoinInterval    = 30 * time.Second
 	telegramFloodRetries    = 3
 )
